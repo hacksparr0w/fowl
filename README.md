@@ -1,2 +1,3 @@
-# fowl
-🦚✂️ Twitter data scraper for Python
+# 🦚✂️ fowl
+
+Twitter data scraper for Python
