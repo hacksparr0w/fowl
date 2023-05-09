@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "fowl"
+version = "0.1.0"
+description = "Twitter data scraper for Python"
+authors = ["hacksparr0w <hacksparr0w@protonmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+aiohttp = "^3.8.4"
+beautifulsoup4 = "^4.12.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
