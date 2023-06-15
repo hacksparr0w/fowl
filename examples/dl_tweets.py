@@ -59,17 +59,15 @@ async def main():
 
     username = sys.argv[1]
 
-    async with aiohttp.ClientSession() as session:
-        await fowl.register(session)
-        user = await fowl.get_user_by_username(session, username)
+    async with fowl.TwitterSession() as session:
+        user = await session.get_user_by_username(username)
         user_id = user["rest_id"]
 
         with open("tweets.yaml", "w", encoding="utf-8") as stream:
             cursor = None
 
             while True:
-                tweets, _, cursor = await fowl.get_tweets(
-                    session,
+                tweets, _, cursor = await session.get_tweets(
                     user_id,
                     cursor=cursor,
                     count=100

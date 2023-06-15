@@ -1,7 +1,6 @@
 import aiohttp
 import json
 import re
-import time
 
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -11,7 +10,6 @@ from bs4 import BeautifulSoup
 
 
 TWITTER_AUTH_TOKEN_PATTERN = re.compile(r"\"([a-zA-Z0-9%]{104})\"")
-TWITTER_METADATA_PATTERN = re.compile(r"window\.__META_DATA__=(\{.+?\});")
 TWITTER_GUEST_TOKEN_COOKIE_PATTERN = re.compile(
     r"document\.cookie=\"(gt=.+?)\";"
 )
@@ -34,22 +32,6 @@ async def _get_json(session, *args, **kwargs) -> dict:
 
 class TwitterApi:
     URL = "https://api.twitter.com/1.1"
-
-    @classmethod
-    def client_event(cls, cookie_fetch_time: int) -> tuple[str, dict]:
-        url = f"{cls.URL}/jot/client_event.json"
-
-        event_value = int(time.time() * 1000) - cookie_fetch_time
-        data = {
-            "category": "perftown",
-            "log": json.dumps([{
-                "description": "rweb:cookiesMetadata:load",
-                "product": "rweb",
-                "event_value": event_value
-            }])
-        }
-
-        return url, data
 
 
 class TwitterWebapp:
@@ -149,31 +131,27 @@ def _parse_app_data(html: str) -> str:
     elements = soup.find_all("script")
 
     url = None
-    metadata = None
     guest_token = None
 
     for element in elements:
         src = element.get("src")
         text = element.text
 
-        metadata_match = TWITTER_METADATA_PATTERN.search(text)
         guest_token_cookie_match = TWITTER_GUEST_TOKEN_COOKIE_PATTERN.search(
             text
         )
 
         if src and "main" in src:
             url = src
-        elif metadata_match:
-            metadata = json.loads(metadata_match.group(1))
         elif guest_token_cookie_match:
             guest_token_cookie = SimpleCookie()
             guest_token_cookie.load(guest_token_cookie_match.group(1))
             guest_token = guest_token_cookie.get("gt").value
 
-    if not url or not metadata or not guest_token:
+    if not url or not guest_token:
         raise ValueError
 
-    return url, metadata, guest_token
+    return url, guest_token
 
 
 def _parse_auth_token(source: str) -> str:
@@ -211,41 +189,40 @@ def _parse_tweets(data: dict) -> dict:
     return entries, cursor_top, cursor_bottom
 
 
-async def register(session):
-    index_source = None
-    app_source = None
+class TwitterSession(aiohttp.ClientSession):
+    async def __aenter__(self):
+        await self.open()
 
-    async with session.get(TwitterWebapp.URL) as response:
-        _validate_status(response)
-        index_source = await response.text()
+        return await super().__aenter__()
 
-    app_url, metadata, guest_token = _parse_app_data(index_source)
-    cookie_fetch_time = metadata["cookies"]["fetchedTime"]
+    async def open(self):
+        index_source = None
+        app_source = None
 
-    async with session.get(app_url) as response:
-        _validate_status(response)
-        app_source = await response.text()
+        async with self.get(TwitterWebapp.URL) as response:
+            _validate_status(response)
+            index_source = await response.text()
 
-    auth_token = _parse_auth_token(app_source)
-    session.headers.update(_build_headers(auth_token, guest_token))
-    endpoint_url, data = TwitterApi.client_event(cookie_fetch_time)
+        app_url, guest_token = _parse_app_data(index_source)
 
-    async with session.post(endpoint_url, data=data) as response:
-        _validate_status(response)
+        async with self.get(app_url) as response:
+            _validate_status(response)
+            app_source = await response.text()
 
+        auth_token = _parse_auth_token(app_source)
+        self.headers.update(_build_headers(auth_token, guest_token))
 
-async def get_user_by_username(session, username: str) -> dict:
-    url, params = TwitterGraphQl.user_by_username(username)
+    async def get_user_by_username(self, username: str) -> dict:
+        url, params = TwitterGraphQl.user_by_username(username)
 
-    return _parse_user(await _get_json(session, url, params=params))
+        return _parse_user(await _get_json(self, url, params=params))
 
+    async def get_tweets(
+            self,
+            user_id: str,
+            count: Optional[int] = None,
+            cursor: Optional[str] = None
+    ) -> dict:
+        url, params = TwitterGraphQl.tweets(user_id, count, cursor)
 
-async def get_tweets(
-        session,
-        user_id: str,
-        count: Optional[int] = None,
-        cursor: Optional[str] = None
-) -> dict:
-    url, params = TwitterGraphQl.tweets(user_id, count, cursor)
-
-    return _parse_tweets(await _get_json(session, url, params=params))
+        return _parse_tweets(await _get_json(self, url, params=params))
