@@ -1,10 +1,12 @@
-import aiohttp
 import json
 import re
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from typing import Optional
+
+import aiohttp
 
 from bs4 import BeautifulSoup
 
@@ -119,6 +121,14 @@ class TwitterGraphQl:
         return url, params
 
 
+@dataclass
+class TwitterUser:
+    rest_id: str
+    handle: str
+    name: str
+    description: str
+
+
 def _build_headers(auth_token: str, guest_token: str) -> dict:
     return {
         "Authorization": f"Bearer {auth_token}",
@@ -163,8 +173,21 @@ def _parse_auth_token(source: str) -> str:
     return match.group(1)
 
 
-def _parse_user(data: dict) -> dict:
-    return data["data"]["user"]["result"]
+def _parse_user(data: dict) -> TwitterUser:
+    result = data["data"]["user"]["result"]
+
+    rest_id = result["rest_id"]
+    legacy = result["legacy"]
+    handle = legacy["screen_name"]
+    name = legacy["name"]
+    description = legacy["description"]
+
+    return TwitterUser(
+        rest_id=rest_id,
+        handle=handle,
+        name=name,
+        description=description
+    )
 
 
 def _parse_tweet_cursor(cursor: dict) -> str:
@@ -212,16 +235,16 @@ class TwitterSession(aiohttp.ClientSession):
         auth_token = _parse_auth_token(app_source)
         self.headers.update(_build_headers(auth_token, guest_token))
 
-    async def get_user_by_username(self, username: str) -> dict:
+    async def get_user_by_username(self, username: str) -> TwitterUser:
         url, params = TwitterGraphQl.user_by_username(username)
 
         return _parse_user(await _get_json(self, url, params=params))
 
     async def get_tweets(
-            self,
-            user_id: str,
-            count: Optional[int] = None,
-            cursor: Optional[str] = None
+        self,
+        user_id: str,
+        count: Optional[int] = None,
+        cursor: Optional[str] = None
     ) -> dict:
         url, params = TwitterGraphQl.tweets(user_id, count, cursor)
 
