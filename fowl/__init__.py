@@ -217,7 +217,7 @@ def _parse_tweet(data: dict) -> Tweet:
     elif "quoted_status_result" in data:
         child = _parse_tweet(data["quoted_status_result"]["result"])
 
-    return Tweet(content, display_text_range, child)
+    return Tweet(author, content, display_text_range, child)
 
 
 def _parse_timeline_tweet_entry(
