@@ -212,7 +212,7 @@ def _parse_user(data: dict) -> TwitterUser:
 def _parse_tweet(data: dict) -> Tweet:
     legacy = data["legacy"]
     content = legacy["full_text"]
-    display_text_range = legacy["display_text_range"]
+    display_text_range = tuple(legacy["display_text_range"])
     child = None
 
     if "retweeted_status_result" in legacy:
