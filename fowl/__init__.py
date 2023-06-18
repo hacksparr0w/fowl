@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from http import HTTPStatus
 from http.cookies import SimpleCookie
-from typing import Optional
+from typing import Optional, Union
 
 import aiohttp
 
@@ -127,11 +127,32 @@ class User:
 
 
 @dataclass
-class Tweet:
+class PlainTweet:
     author: User
-    content: Optional[str]
+    content: str
     display_text_range: tuple[int, int]
-    child: Optional["Tweet"] = None
+
+
+@dataclass
+class QuoteTweet:
+    author: User
+    content: str
+    display_text_range: tuple[int, int]
+    child: "Tweet"
+
+
+@dataclass
+class Retweet:
+    author: User
+    child: "Tweet"
+
+
+@dataclass
+class TombstoneTweet:
+    pass
+
+
+Tweet = Union[PlainTweet, QuoteTweet, Retweet, TombstoneTweet]
 
 
 class TimelineEntryType(Enum):
@@ -205,19 +226,26 @@ def _parse_user(data: dict) -> User:
 
 
 def _parse_tweet(data: dict) -> Tweet:
+    type_name = data["__typename"]
+
+    if type_name == "TweetTombstone":
+        return TombstoneTweet()
+
     legacy = data["legacy"]
     author = _parse_user(data["core"]["user_results"]["result"])
     content = legacy["full_text"]
     display_text_range = tuple(legacy["display_text_range"])
-    child = None
 
     if "retweeted_status_result" in legacy:
         child = _parse_tweet(legacy["retweeted_status_result"]["result"])
-        content = None
+
+        return Retweet(author, child)
     elif "quoted_status_result" in data:
         child = _parse_tweet(data["quoted_status_result"]["result"])
 
-    return Tweet(author, content, display_text_range, child)
+        return QuoteTweet(author, content, display_text_range, child)
+    else:
+        return PlainTweet(author, content, display_text_range)
 
 
 def _parse_timeline_tweet_entry(
