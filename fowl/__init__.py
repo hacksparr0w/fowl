@@ -2,9 +2,10 @@ import json
 import re
 
 from dataclasses import dataclass
+from enum import Enum, auto
 from http import HTTPStatus
 from http.cookies import SimpleCookie
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -51,10 +52,10 @@ class TwitterGraphQl:
         }
 
     @classmethod
-    def user_by_username(cls, username: str) -> tuple[str, dict, dict]:
+    def user_by_handle(cls, handle: str) -> tuple[str, dict, dict]:
         url = f"{cls.URL}/pVrmNaXcxPjisIvKtLDMEA/UserByScreenName"
         variables = {
-            "screen_name": username
+            "screen_name": handle
         }
 
         features = {
@@ -72,7 +73,7 @@ class TwitterGraphQl:
         return url, params
 
     @classmethod
-    def tweets(
+    def timeline(
             cls,
             user_id: str,
             count: Optional[int] = None,
@@ -127,6 +128,23 @@ class TwitterUser:
     handle: str
     name: str
     description: str
+
+
+@dataclass
+class Tweet:
+    content: Optional[str]
+    child: Optional["Tweet"] = None
+
+
+class TimelineEntryType(Enum):
+    PINNED_TWEET = auto()
+    STATUS_TWEET = auto()
+
+
+@dataclass
+class TimelineEntry:
+    type: TimelineEntryType
+    tweet: Tweet
 
 
 def _build_headers(auth_token: str, guest_token: str) -> dict:
@@ -190,21 +208,62 @@ def _parse_user(data: dict) -> TwitterUser:
     )
 
 
+def _parse_tweet(data: dict) -> Tweet:
+    legacy = data["legacy"]
+    content = legacy["full_text"]
+    child = None
+
+    if "retweeted_status_result" in legacy:
+        child = _parse_tweet(legacy["retweeted_status_result"]["result"])
+        content = None
+    elif "quoted_status_result" in data:
+        child = _parse_tweet(data["quoted_status_result"]["result"])
+
+    return Tweet(content, child)
+
+
+def _parse_timeline_tweet_entry(
+    data: dict,
+    type: TimelineEntryType
+) -> TimelineEntry:
+    tweet = _parse_tweet(
+        data["content"]["itemContent"]["tweet_results"]["result"]
+    )
+
+    return TimelineEntry(type, tweet)
+
+
 def _parse_tweet_cursor(cursor: dict) -> str:
     return cursor["content"]["value"]
 
 
-def _parse_tweets(data: dict) -> dict:
-    timeline = data["data"]["user"]["result"]["timeline_v2"]["timeline"]
-    instructions = timeline["instructions"]
+def _parse_timeline(
+    data: dict,
+    pinned: bool
+) -> tuple[list[TimelineEntry], str, str]:
+    instructions = data["data"]["user"]["result"]["timeline_v2"]["timeline"]["instructions"]
 
     entries = []
+    cursors = None
 
     for instruction in instructions:
         if instruction["type"] == "TimelineAddEntries":
-            entries = instruction["entries"]
-            cursors = entries[-2:]
-            entries = entries[:-2]
+            items = instruction["entries"]
+            cursors = items[-2:]
+            parse = lambda x: (
+                _parse_timeline_tweet_entry(x, TimelineEntryType.STATUS_TWEET)
+            )
+
+            parsed = list(map(parse, items[:-2]))
+            entries.extend(parsed)
+        if instruction["type"] == "TimelinePinEntry" and pinned:
+            item = instruction["entry"]
+            parsed = _parse_timeline_tweet_entry(
+                item,
+                TimelineEntryType.PINNED_TWEET
+            )
+
+            entries.append(parsed)
 
     cursor_top = _parse_tweet_cursor(cursors[0])
     cursor_bottom = _parse_tweet_cursor(cursors[1])
@@ -235,17 +294,21 @@ class TwitterSession(aiohttp.ClientSession):
         auth_token = _parse_auth_token(app_source)
         self.headers.update(_build_headers(auth_token, guest_token))
 
-    async def get_user_by_username(self, username: str) -> TwitterUser:
-        url, params = TwitterGraphQl.user_by_username(username)
+    async def get_user_by_handle(self, handle: str) -> TwitterUser:
+        url, params = TwitterGraphQl.user_by_handle(handle)
 
         return _parse_user(await _get_json(self, url, params=params))
 
-    async def get_tweets(
+    async def get_timeline(
         self,
         user_id: str,
         count: Optional[int] = None,
-        cursor: Optional[str] = None
-    ) -> dict:
-        url, params = TwitterGraphQl.tweets(user_id, count, cursor)
+        cursor: Optional[str] = None,
+        pinned: bool = True
+    ) -> tuple[list[TimelineEntry], str, str]:
+        url, params = TwitterGraphQl.timeline(user_id, count, cursor)
 
-        return _parse_tweets(await _get_json(self, url, params=params))
+        return _parse_timeline(
+            await _get_json(self, url, params=params),
+            pinned
+        )
