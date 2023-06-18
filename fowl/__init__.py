@@ -269,7 +269,7 @@ def _parse_timeline(
     return entries, cursor_top, cursor_bottom
 
 
-class TwitterSession(aiohttp.ClientSession):
+class ClientSession(aiohttp.ClientSession):
     async def __aenter__(self):
         await self.open()
 

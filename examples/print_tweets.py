@@ -4,7 +4,7 @@ import fowl
 
 
 async def main():
-    async with fowl.TwitterSession() as session:
+    async with fowl.ClientSession() as session:
         user = await session.get_user_by_handle("hacksparr0w")
         cursor = None
 
