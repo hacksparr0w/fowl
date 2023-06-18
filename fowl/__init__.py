@@ -5,22 +5,22 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from http import HTTPStatus
 from http.cookies import SimpleCookie
-from typing import Any, Optional
+from typing import Optional
 
 import aiohttp
 
 from bs4 import BeautifulSoup
 
 
-TWITTER_AUTH_TOKEN_PATTERN = re.compile(r"\"([a-zA-Z0-9%]{104})\"")
-TWITTER_GUEST_TOKEN_COOKIE_PATTERN = re.compile(
+_TWITTER_AUTH_TOKEN_PATTERN = re.compile(r"\"([a-zA-Z0-9%]{104})\"")
+_TWITTER_GUEST_TOKEN_COOKIE_PATTERN = re.compile(
     r"document\.cookie=\"(gt=.+?)\";"
 )
 
 
 def _validate_status(
-        response: aiohttp.ClientResponse,
-        status: Optional[int] = HTTPStatus.OK
+    response: aiohttp.ClientResponse,
+    status: Optional[int] = HTTPStatus.OK
 ) -> None:
     if response.status != status:
         raise ValueError
@@ -33,15 +33,11 @@ async def _get_json(session, *args, **kwargs) -> dict:
         return await response.json()
 
 
-class TwitterApi:
-    URL = "https://api.twitter.com/1.1"
-
-
-class TwitterWebapp:
+class _TwitterWebapp:
     URL = "https://twitter.com"
 
 
-class TwitterGraphQl:
+class _TwitterGraphQl:
     URL = "https://twitter.com/i/api/graphql"
 
     @staticmethod
@@ -123,7 +119,7 @@ class TwitterGraphQl:
 
 
 @dataclass
-class TwitterUser:
+class User:
     rest_id: str
     handle: str
     name: str
@@ -132,6 +128,7 @@ class TwitterUser:
 
 @dataclass
 class Tweet:
+    author: User
     content: Optional[str]
     display_text_range: tuple[int, int]
     child: Optional["Tweet"] = None
@@ -166,7 +163,7 @@ def _parse_app_data(html: str) -> str:
         src = element.get("src")
         text = element.text
 
-        guest_token_cookie_match = TWITTER_GUEST_TOKEN_COOKIE_PATTERN.search(
+        guest_token_cookie_match = _TWITTER_GUEST_TOKEN_COOKIE_PATTERN.search(
             text
         )
 
@@ -184,7 +181,7 @@ def _parse_app_data(html: str) -> str:
 
 
 def _parse_auth_token(source: str) -> str:
-    match = TWITTER_AUTH_TOKEN_PATTERN.search(source)
+    match = _TWITTER_AUTH_TOKEN_PATTERN.search(source)
 
     if not match:
         raise ValueError
@@ -192,16 +189,14 @@ def _parse_auth_token(source: str) -> str:
     return match.group(1)
 
 
-def _parse_user(data: dict) -> TwitterUser:
-    result = data["data"]["user"]["result"]
-
-    rest_id = result["rest_id"]
-    legacy = result["legacy"]
+def _parse_user(data: dict) -> User:
+    rest_id = data["rest_id"]
+    legacy = data["legacy"]
     handle = legacy["screen_name"]
     name = legacy["name"]
     description = legacy["description"]
 
-    return TwitterUser(
+    return User(
         rest_id=rest_id,
         handle=handle,
         name=name,
@@ -211,6 +206,7 @@ def _parse_user(data: dict) -> TwitterUser:
 
 def _parse_tweet(data: dict) -> Tweet:
     legacy = data["legacy"]
+    author = _parse_user(data["core"]["user_results"]["result"])
     content = legacy["full_text"]
     display_text_range = tuple(legacy["display_text_range"])
     child = None
@@ -283,7 +279,7 @@ class TwitterSession(aiohttp.ClientSession):
         index_source = None
         app_source = None
 
-        async with self.get(TwitterWebapp.URL) as response:
+        async with self.get(_TwitterWebapp.URL) as response:
             _validate_status(response)
             index_source = await response.text()
 
@@ -296,10 +292,12 @@ class TwitterSession(aiohttp.ClientSession):
         auth_token = _parse_auth_token(app_source)
         self.headers.update(_build_headers(auth_token, guest_token))
 
-    async def get_user_by_handle(self, handle: str) -> TwitterUser:
-        url, params = TwitterGraphQl.user_by_handle(handle)
+    async def get_user_by_handle(self, handle: str) -> User:
+        url, params = _TwitterGraphQl.user_by_handle(handle)
+        data = await _get_json(self, url, params=params)
+        data = data["data"]["user"]["result"]
 
-        return _parse_user(await _get_json(self, url, params=params))
+        return _parse_user(data)
 
     async def get_timeline(
         self,
@@ -308,7 +306,7 @@ class TwitterSession(aiohttp.ClientSession):
         cursor: Optional[str] = None,
         pinned: bool = True
     ) -> tuple[list[TimelineEntry], str, str]:
-        url, params = TwitterGraphQl.timeline(user_id, count, cursor)
+        url, params = _TwitterGraphQl.timeline(user_id, count, cursor)
 
         return _parse_timeline(
             await _get_json(self, url, params=params),
