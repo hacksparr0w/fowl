@@ -133,6 +133,7 @@ class TwitterUser:
 @dataclass
 class Tweet:
     content: Optional[str]
+    display_text_range: tuple[int, int]
     child: Optional["Tweet"] = None
 
 
@@ -211,6 +212,7 @@ def _parse_user(data: dict) -> TwitterUser:
 def _parse_tweet(data: dict) -> Tweet:
     legacy = data["legacy"]
     content = legacy["full_text"]
+    display_text_range = legacy["display_text_range"]
     child = None
 
     if "retweeted_status_result" in legacy:
@@ -219,7 +221,7 @@ def _parse_tweet(data: dict) -> Tweet:
     elif "quoted_status_result" in data:
         child = _parse_tweet(data["quoted_status_result"]["result"])
 
-    return Tweet(content, child)
+    return Tweet(content, display_text_range, child)
 
 
 def _parse_timeline_tweet_entry(
